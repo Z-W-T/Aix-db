@@ -160,3 +160,34 @@ class TDataTraining(Base):
     )
     enabled: Mapped[Optional[bool]] = mapped_column(Boolean, default=True, comment="是否启用")
     advanced_application: Mapped[Optional[int]] = mapped_column(BigInteger, comment="高级应用ID")
+
+
+class TKnowledgeBase(Base):
+    __tablename__ = "t_knowledge_base"
+    __table_args__ = {"comment": "RAG 知识库表"}
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, comment="知识库名称")
+    oid: Mapped[Optional[int]] = mapped_column(BigInteger, default=1, comment="组织ID")
+    enabled: Mapped[Optional[bool]] = mapped_column(Boolean, default=True, comment="是否启用")
+    create_time: Mapped[Optional[datetime.datetime]] = mapped_column(
+        TIMESTAMP, server_default=text("CURRENT_TIMESTAMP"), comment="创建时间"
+    )
+
+
+class TKnowledgeChunk(Base):
+    __tablename__ = "t_knowledge_chunk"
+    __table_args__ = {"comment": "RAG 知识库分块表"}
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kb_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="知识库ID")
+    source_file_key: Mapped[Optional[str]] = mapped_column(String(500), comment="源文件 MinIO key")
+    parse_file_key: Mapped[Optional[str]] = mapped_column(String(500), comment="解析文件 MinIO key")
+    chunk_index: Mapped[Optional[int]] = mapped_column(Integer, default=0, comment="分块索引")
+    content: Mapped[Optional[str]] = mapped_column(Text, comment="分块文本内容")
+    embedding: Mapped[Optional[Union[List[float], str]]] = mapped_column(
+        VECTOR, nullable=True, comment="向量数据（pgvector VECTOR 类型）"
+    )
+    create_time: Mapped[Optional[datetime.datetime]] = mapped_column(
+        TIMESTAMP, server_default=text("CURRENT_TIMESTAMP"), comment="创建时间"
+    )

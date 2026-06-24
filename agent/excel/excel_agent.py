@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import os
 import time
 import traceback
 import uuid
@@ -15,6 +14,11 @@ from agent.excel.excel_duckdb_manager import (
     get_chat_duckdb_manager,
 )
 from agent.excel.excel_graph import create_excel_graph
+from common.langfuse_util import (
+    create_langfuse_callback_handler,
+    is_tracing_enabled,
+    langfuse_trace_context,
+)
 from constants.code_enum import DataTypeEnum
 from services.user_service import (
     add_user_record,
@@ -52,9 +56,7 @@ class ExcelAgent:
         self.running_tasks = {}
         self.excel_graph = create_excel_graph()
         # 是否启用链路追踪
-        self.ENABLE_TRACING = (
-            os.getenv("LANGFUSE_TRACING_ENABLED", "false").lower() == "true"
-        )
+        self.ENABLE_TRACING = is_tracing_enabled()
         # 存储步骤开始时间（用于计算耗时）
         self.step_start_times = {}
         # 存储步骤的 progressId
@@ -117,10 +119,7 @@ class ExcelAgent:
             # 准备 tracing 配置
             config = {}
             if self.ENABLE_TRACING:
-                # 延迟导入，仅在启用时导入
-                from langfuse.langchain import CallbackHandler
-
-                langfuse_handler = CallbackHandler()
+                langfuse_handler = create_langfuse_callback_handler()
                 callbacks = [langfuse_handler]
                 config = {
                     "callbacks": callbacks,
@@ -138,19 +137,14 @@ class ExcelAgent:
 
             # 如果启用 tracing，包裹在 trace 上下文中
             if self.ENABLE_TRACING:
-                # 延迟导入，仅在启用时导入
-                from langfuse import get_client
-
-                langfuse = get_client()
-                with langfuse.start_as_current_observation(
-                    input=query,
-                    as_type="agent",
+                user_info = await decode_jwt_token(user_token)
+                user_id = user_info.get("id")
+                with langfuse_trace_context(
                     name="表格问答",
-                ) as rootspan:
-                    user_info = await decode_jwt_token(user_token)
-                    user_id = user_info.get("id")
-                    rootspan.update_trace(session_id=chat_id, user_id=user_id)
-
+                    input_value=query,
+                    session_id=chat_id,
+                    user_id=user_id,
+                ):
                     async for chunk_dict in graph.astream(**stream_kwargs):
                         (
                             current_step,

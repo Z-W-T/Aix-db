@@ -21,6 +21,11 @@ from agent.deepagent.tools.tool_call_manager import get_tool_call_manager
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
+from common.langfuse_util import (
+    create_langfuse_callback_handler,
+    is_tracing_enabled,
+    langfuse_trace_context,
+)
 from common.llm_util import get_llm
 from common.minio_util import MinioUtils
 from constants.code_enum import DataTypeEnum, IntentEnum
@@ -122,7 +127,7 @@ class EnhancedCommonAgent:
         self.memory_store = None
         self.running_tasks = {}
         self.tool_manager = get_tool_call_manager()
-        self.ENABLE_TRACING = os.getenv("LANGFUSE_TRACING_ENABLED", "false").lower() == "true"
+        self.ENABLE_TRACING = is_tracing_enabled()
 
     # ==================== MCP 客户端 ====================
 
@@ -574,6 +579,17 @@ class EnhancedCommonAgent:
         if file_as_markdown:
             formatted_query += f"\n\n文件文本内容：\n{file_as_markdown}"
 
+        # RAG 知识库检索：将匹配的知识上下文拼入查询
+        try:
+            from services.knowledge_base_service import retrieve_knowledge_context
+
+            kb_context = await retrieve_knowledge_context(query)
+            if kb_context:
+                formatted_query = f"{kb_context}\n\n用户问题：{formatted_query}"
+                logger.info("RAG 知识库检索成功，已注入上下文")
+        except Exception as e:
+            logger.warning(f"RAG 知识库检索失败，跳过: {e}")
+
         # 重置工具管理器
         self.tool_manager.reset_session(task_id)
 
@@ -595,8 +611,7 @@ class EnhancedCommonAgent:
                 "recursion_limit": self.DEFAULT_RECURSION_LIMIT,
             }
             if self.ENABLE_TRACING:
-                from langfuse.langchain import CallbackHandler
-                config["callbacks"] = [CallbackHandler()]
+                config["callbacks"] = [create_langfuse_callback_handler()]
                 config["metadata"] = {"langfuse_session_id": session_id}
 
             mcp_tools = await self._get_mcp_tools()
@@ -618,16 +633,12 @@ class EnhancedCommonAgent:
 
             try:
                 if self.ENABLE_TRACING:
-                    from langfuse import get_client
-                    langfuse = get_client()
-                    with langfuse.start_as_current_observation(
-                        input=query,
-                        as_type="agent",
+                    with langfuse_trace_context(
                         name="通用问答",
-                    ) as rootspan:
-                        rootspan.update_trace(
-                            session_id=session_id, user_id=str(task_id)
-                        )
+                        input_value=query,
+                        session_id=session_id,
+                        user_id=str(task_id),
+                    ):
                         await asyncio.wait_for(task, timeout=self.TASK_TIMEOUT)
                 else:
                     await asyncio.wait_for(task, timeout=self.TASK_TIMEOUT)

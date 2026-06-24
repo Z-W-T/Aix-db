@@ -44,7 +44,7 @@ const childrenRoutes: Array<RouteRecordRaw> = [
     path: 'knowledge-manager',
     name: 'KnowledgeManager',
     component: () => import('@/views/knowledge/knowledge-manager.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, title: '知识库管理' },
   },
   {
     path: 'llm-config',

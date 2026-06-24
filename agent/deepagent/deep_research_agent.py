@@ -35,6 +35,11 @@ from agent.deepagent.tools.native_sql_tools import (
     sql_db_table_relationship,
 )
 from agent.deepagent.tools.tool_call_manager import get_tool_call_manager
+from common.langfuse_util import (
+    create_langfuse_callback_handler,
+    is_tracing_enabled,
+    langfuse_trace_context,
+)
 from services.skill_service import SkillService
 from common.datasource_util import (
     DB,
@@ -154,7 +159,7 @@ class DeepAgent:
         )
 
         # 链路追踪配置
-        self.ENABLE_TRACING = os.getenv("LANGFUSE_TRACING_ENABLED", "false").lower() == "true"
+        self.ENABLE_TRACING = is_tracing_enabled()
 
     # ==================== 技能加载 ====================
 
@@ -462,23 +467,18 @@ class DeepAgent:
 
             # 如果启用追踪，添加 Langfuse Callback
             if self.ENABLE_TRACING:
-                from langfuse.langchain import CallbackHandler
-                config["callbacks"] = [CallbackHandler()]
+                config["callbacks"] = [create_langfuse_callback_handler()]
                 config["metadata"] = {"langfuse_session_id": session_id}
 
             try:
                 # 根据是否启用追踪，选择执行方式
                 if self.ENABLE_TRACING:
-                    from langfuse import get_client
-                    langfuse = get_client()
-                    with langfuse.start_as_current_observation(
-                        input=query,
-                        as_type="agent",
+                    with langfuse_trace_context(
                         name="Deep Research Agent (SQL)",
-                    ) as rootspan:
-                        rootspan.update_trace(
-                            session_id=session_id, user_id=str(task_id)
-                        )
+                        input_value=query,
+                        session_id=session_id,
+                        user_id=str(task_id),
+                    ):
                         connection_closed = await asyncio.wait_for(
                             self._stream_response(
                                 agent,

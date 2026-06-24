@@ -89,6 +89,7 @@
     "onUnmounted": true,
     "onUpdated": true,
     "onWatcherCleanup": true,
+    "pageAgentInstructions": true,
     "pausableWatch": true,
     "provide": true,
     "provideLocal": true,
@@ -133,6 +134,8 @@
     "until": true,
     "useActiveElement": true,
     "useAnimate": true,
+    "useAppStore": true,
+    "useAppStoreWithOut": true,
     "useArrayDifference": true,
     "useArrayEvery": true,
     "useArrayFilter": true,
@@ -235,6 +238,7 @@
     "useObjectUrl": true,
     "useOffsetPagination": true,
     "useOnline": true,
+    "usePageAgent": true,
     "usePageLeave": true,
     "useParallax": true,
     "useParentElement": true,
@@ -261,6 +265,7 @@
     "useScrollLock": true,
     "useSessionStorage": true,
     "useShare": true,
+    "useSlashCommand": true,
     "useSlots": true,
     "useSorted": true,
     "useSpeechRecognition": true,
@@ -321,11 +326,6 @@
     "watchThrottled": true,
     "watchTriggerable": true,
     "watchWithFilter": true,
-    "whenever": true,
-    "useAppStore": true,
-    "useAppStoreWithOut": true,
-    "usePageAgent": true,
-    "pageAgentInstructions": true,
-    "useSlashCommand": true
+    "whenever": true
   }
 }

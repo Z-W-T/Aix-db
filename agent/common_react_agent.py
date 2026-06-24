@@ -16,6 +16,11 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.middleware.customer_middleware import log_before_model
+from common.langfuse_util import (
+    create_langfuse_callback_handler,
+    is_tracing_enabled,
+    langfuse_trace_context,
+)
 from common.llm_util import get_llm
 from common.minio_util import MinioUtils
 from constants.code_enum import DataTypeEnum, IntentEnum
@@ -36,9 +41,7 @@ class CommonReactAgent:
     def __init__(self):
 
         # 是否启用链路追踪
-        self.ENABLE_TRACING = (
-            os.getenv("LANGFUSE_TRACING_ENABLED", "false").lower() == "true"
-        )
+        self.ENABLE_TRACING = is_tracing_enabled()
 
         # 使用 os.path 构建路径
         # current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -127,10 +130,7 @@ class CommonReactAgent:
 
             # 准备 tracing 配置
             if self.ENABLE_TRACING:
-                # 延迟导入，仅在启用时导入
-                from langfuse.langchain import CallbackHandler
-
-                langfuse_handler = CallbackHandler()
+                langfuse_handler = create_langfuse_callback_handler()
                 callbacks = [langfuse_handler]
                 config["callbacks"] = callbacks
                 config["metadata"] = {"langfuse_session_id": session_id}
@@ -280,18 +280,14 @@ class CommonReactAgent:
             }
 
             if self.ENABLE_TRACING:
-                # 延迟导入，仅在启用时导入
-                from langfuse import get_client
-
-                langfuse = get_client()
-                with langfuse.start_as_current_observation(
-                    input=query,
-                    as_type="agent",
+                user_info = await decode_jwt_token(user_token)
+                user_id = user_info.get("id")
+                with langfuse_trace_context(
                     name="通用问答",
-                ) as rootspan:
-                    user_info = await decode_jwt_token(user_token)
-                    user_id = user_info.get("id")
-                    rootspan.update_trace(session_id=session_id, user_id=user_id)
+                    input_value=query,
+                    session_id=session_id,
+                    user_id=user_id,
+                ):
                     await self._stream_agent_response(
                         agent, stream_args, response, task_id, t02_answer_data
                     )

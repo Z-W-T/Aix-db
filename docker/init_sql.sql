@@ -274,3 +274,41 @@ COMMENT ON COLUMN t_datasource_auth.datasource_id IS '数据源ID';
 COMMENT ON COLUMN t_datasource_auth.user_id IS '用户ID';
 COMMENT ON COLUMN t_datasource_auth.enable IS '是否启用';
 COMMENT ON COLUMN t_datasource_auth.create_time IS '创建时间';
+
+-- t_knowledge_base definition
+DROP TABLE IF EXISTS t_knowledge_base CASCADE;
+CREATE TABLE t_knowledge_base (
+  id BIGSERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  oid BIGINT DEFAULT 1,
+  enabled BOOLEAN DEFAULT TRUE,
+  create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE t_knowledge_base IS 'RAG 知识库表';
+COMMENT ON COLUMN t_knowledge_base.name IS '知识库名称';
+COMMENT ON COLUMN t_knowledge_base.oid IS '组织ID';
+COMMENT ON COLUMN t_knowledge_base.enabled IS '是否启用';
+COMMENT ON COLUMN t_knowledge_base.create_time IS '创建时间';
+
+-- t_knowledge_chunk definition
+DROP TABLE IF EXISTS t_knowledge_chunk CASCADE;
+CREATE TABLE t_knowledge_chunk (
+  id BIGSERIAL PRIMARY KEY,
+  kb_id BIGINT NOT NULL,
+  source_file_key VARCHAR(500),
+  parse_file_key VARCHAR(500),
+  chunk_index INTEGER DEFAULT 0,
+  content TEXT,
+  embedding VECTOR,
+  create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE t_knowledge_chunk IS 'RAG 知识库分块表';
+COMMENT ON COLUMN t_knowledge_chunk.kb_id IS '知识库ID';
+COMMENT ON COLUMN t_knowledge_chunk.source_file_key IS '源文件 MinIO key';
+COMMENT ON COLUMN t_knowledge_chunk.parse_file_key IS '解析文件 MinIO key';
+COMMENT ON COLUMN t_knowledge_chunk.chunk_index IS '分块索引';
+COMMENT ON COLUMN t_knowledge_chunk.content IS '分块文本内容';
+COMMENT ON COLUMN t_knowledge_chunk.embedding IS '向量数据（pgvector VECTOR 类型）';
+COMMENT ON COLUMN t_knowledge_chunk.create_time IS '创建时间';

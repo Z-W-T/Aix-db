@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import os
 import time
 import uuid
 from typing import Any, Dict, Optional, Union
@@ -10,6 +9,11 @@ from langgraph.graph.state import CompiledStateGraph
 
 from agent.text2sql.analysis.graph import create_graph
 from agent.text2sql.state.agent_state import AgentState
+from common.langfuse_util import (
+    create_langfuse_callback_handler,
+    is_tracing_enabled,
+    langfuse_trace_context,
+)
 from constants.code_enum import DataTypeEnum, IntentEnum
 from services.user_service import add_user_record, decode_jwt_token
 
@@ -45,9 +49,7 @@ class Text2SqlAgent:
         # 存储运行中的任务
         self.running_tasks = {}
         # 是否启用链路追踪
-        self.ENABLE_TRACING = (
-            os.getenv("LANGFUSE_TRACING_ENABLED", "false").lower() == "true"
-        )
+        self.ENABLE_TRACING = is_tracing_enabled()
         # 存储步骤开始时间（用于计算耗时）
         self.step_start_times = {}
         # 存储步骤的 progressId
@@ -136,10 +138,7 @@ class Text2SqlAgent:
             # 准备 tracing 配置
             config = {}
             if self.ENABLE_TRACING:
-                # 延迟导入，仅在启用时导入
-                from langfuse.langchain import CallbackHandler
-
-                langfuse_handler = CallbackHandler()
+                langfuse_handler = create_langfuse_callback_handler()
                 callbacks = [langfuse_handler]
                 config = {
                     "callbacks": callbacks,
@@ -157,18 +156,12 @@ class Text2SqlAgent:
 
             # 如果启用 tracing，包裹在 trace 上下文中
             if self.ENABLE_TRACING:
-                # 延迟导入，仅在启用时导入
-                from langfuse import get_client
-
-                langfuse = get_client()
-                with langfuse.start_as_current_observation(
-                    input=query,
-                    as_type="agent",
+                with langfuse_trace_context(
                     name="数据问答",
-                ) as rootspan:
-                    # 使用之前获取的 user_id，避免重复调用
-                    rootspan.update_trace(session_id=chat_id, user_id=user_id)
-
+                    input_value=query,
+                    session_id=chat_id,
+                    user_id=user_id,
+                ):
                     async for chunk_dict in graph.astream(**stream_kwargs):
                         current_step, t02_answer_data = await self._process_chunk(
                             chunk_dict,

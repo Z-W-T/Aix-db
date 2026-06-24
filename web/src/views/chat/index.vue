@@ -110,6 +110,7 @@ function newChat() {
     return
   }
   backgroundColorVariable.value = '#ffffff'
+  autoScrollEnabled.value = true
 
   // 更新转场Key，确保如果是从聊天页切回默认页（虽然这里是切到默认页，动画由v-if控制，但重置Key是个好习惯）
   // 或者如果直接在当前页重置（假设逻辑允许），Key变化会触发动画
@@ -344,7 +345,7 @@ const onRecycleQa = async (index: number) => {
   suggested_array.value = []
   // 发送问题重新生成
   handleCreateStylized(item.question, item.file_key)
-  scrollToBottom()
+  scrollToBottom(true)
 }
 
 // 赞 结果反馈
@@ -1038,18 +1039,23 @@ const handleCreateStylized = async (
   }
 
   // 滚动到底部
-  scrollToBottom()
+  autoScrollEnabled.value = true
+  scrollToBottom(true)
 }
 
 // 滚动到底部
-const scrollToBottom = () => {
-  if (isView.value === false) {
-    nextTick(() => {
-      if (messagesContainer.value) {
-        messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-      }
-    })
+const scrollToBottom = (force = false) => {
+  if (isView.value) {
+    return
   }
+  if (!force && !autoScrollEnabled.value) {
+    return
+  }
+  nextTick(() => {
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+    }
+  })
 }
 
 // 输入框键盘事件拦截（斜杠命令优先）
@@ -1392,6 +1398,7 @@ const backgroundColorVariable = ref('#ffffff')
 // 添加一键滚动到底部功能的相关代码
 const showScrollToBottom = ref(false)
 const scrollThreshold = 1000 // 滚动超过100px时显示按钮
+const autoScrollEnabled = ref(true)
 
 const datasourceList = ref<any[]>([])
 const selectedDatasource = ref<any>(null)
@@ -1401,10 +1408,9 @@ const showReportQaDatasourcePopover = ref(false)
 // 用户点击图标滚动到底部
 const clickScrollToBottom = () => {
   nextTick(() => {
-    if (messagesContainer.value) {
-      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-      showScrollToBottom.value = false // 滚动到底部后隐藏按钮
-    }
+    autoScrollEnabled.value = true
+    scrollToBottom(true)
+    showScrollToBottom.value = false // 滚动到底部后隐藏按钮
   })
 }
 
@@ -1413,6 +1419,7 @@ const checkScrollPosition = () => {
   if (messagesContainer.value) {
     const { scrollTop, scrollHeight, clientHeight } = messagesContainer.value
     const isAtBottom = scrollTop + clientHeight >= scrollHeight - 10 // 10px的容差
+    autoScrollEnabled.value = isAtBottom
     showScrollToBottom.value = !isAtBottom && scrollTop > scrollThreshold
   }
 }
