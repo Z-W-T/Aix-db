@@ -6,9 +6,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from common.minio_util import MinioUtils
+from common.exception import MyException
+from constants.code_enum import SysCodeEnum
 from model.db_connection_pool import get_db_pool
 from model.db_models import TKnowledgeBase, TKnowledgeChunk
-from services.embedding_service import generate_embedding
+from services.embedding_service import generate_embeddings_batch
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,8 @@ RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "800"))
 RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "120"))
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "6"))
 RAG_SIMILARITY = float(os.getenv("RAG_SIMILARITY", "0.3"))
+# 单个文档分块数量上限，防止超大文档一次性加载过多 embedding 导致内存耗尽
+RAG_MAX_CHUNKS = int(os.getenv("RAG_MAX_CHUNKS", "500"))
 
 
 def _split_text(text: str, chunk_size: int, overlap: int) -> List[str]:
@@ -37,6 +41,9 @@ def _split_text(text: str, chunk_size: int, overlap: int) -> List[str]:
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
+        # 已经处理到文本末尾，必须退出，避免 overlap 导致死循环
+        if end >= text_len:
+            break
         start = end - safe_overlap
         if start < 0:
             start = 0
@@ -91,14 +98,34 @@ async def index_uploaded_file_async(
 
     text_content = _read_minio_text(parse_file_key)
     chunks = _split_text(text_content, RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP)
+    logger.info(f"[KB-INDEX] parse_file_key={parse_file_key}, text_len={len(text_content)}, chunks={len(chunks)}")
 
     if not chunks:
         return {"kb_id": kb_id or 0, "chunk_count": 0}
 
-    embeddings: List[Optional[List[float]]] = []
-    for chunk in chunks:
-        embedding = await generate_embedding(chunk)
-        embeddings.append(embedding)
+    # 限制分块数量，防止超大文档一次性生成过多 embedding 导致内存耗尽
+    if len(chunks) > RAG_MAX_CHUNKS:
+        logger.warning(
+            f"Document chunk count {len(chunks)} exceeds limit {RAG_MAX_CHUNKS}, "
+            f"truncating. Consider increasing RAG_CHUNK_SIZE or RAG_MAX_CHUNKS."
+        )
+        chunks = chunks[:RAG_MAX_CHUNKS]
+
+    # 批量生成 embedding，避免逐条调用在低内存环境（如 WSL）中触发 OOM
+    embeddings = await generate_embeddings_batch(chunks)
+    valid_count = sum(1 for e in embeddings if e is not None)
+    logger.info(f"[KB-INDEX] embeddings generated, valid={valid_count}/{len(embeddings)}")
+
+    # 校验 embedding 结果：若全部为 None 说明模型不可用（如内存不足无法加载本地模型）
+    if all(emb is None for emb in embeddings):
+        logger.error(
+            "All embeddings are None, embedding model unavailable. "
+            "Please configure an online Embedding model (model_type=2) in the database."
+        )
+        raise MyException(
+            SysCodeEnum.c_9999,
+            "Embedding 模型不可用，请在系统中配置 Embedding 模型或确保本地模型有足够内存加载",
+        )
 
     with pool.get_session() as session:
         kb = _get_or_create_kb(session, kb_id, kb_name, oid)
@@ -120,6 +147,7 @@ async def index_uploaded_file_async(
                 )
             )
 
+        logger.info(f"[KB-INDEX] indexed {len(chunks)} chunks into kb_id={kb.id}")
         return {"kb_id": kb.id, "chunk_count": len(chunks)}
 
 
@@ -133,7 +161,8 @@ async def retrieve_knowledge_context(
     if not question or not question.strip():
         return ""
 
-    embedding = await generate_embedding(question)
+    embeddings = await generate_embeddings_batch([question])
+    embedding = embeddings[0] if embeddings else None
     if not embedding:
         return ""
 

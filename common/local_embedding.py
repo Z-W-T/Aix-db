@@ -20,6 +20,47 @@ DEFAULT_EMBEDDING_MODEL_ID = os.getenv(
     "DEFAULT_EMBEDDING_MODEL", "shibing624/text2vec-base-chinese"
 )
 
+# 加载本地模型所需的最小可用内存（MB），低于此值直接拒绝加载，避免 OOM 导致系统崩溃
+# 注意：PyTorch + sentence-transformers 加载时虚拟内存需求可达 6-10GB，
+# 即使物理内存够用，也可能因虚拟内存/地址空间不足触发 OOM killer。
+# 在 WSL 等内存受限环境，建议保持较高阈值（默认 3000MB）以确保安全。
+# 如需在低内存环境强制启用，可设置环境变量 LOCAL_EMBEDDING_MIN_MEMORY_MB 为更小值。
+MIN_MEMORY_REQUIRED_MB = int(os.getenv("LOCAL_EMBEDDING_MIN_MEMORY_MB", "3000"))
+# 单次批量推理的最大文本数量，避免单批内存占用过高
+LOCAL_EMBEDDING_BATCH_SIZE = int(os.getenv("LOCAL_EMBEDDING_BATCH_SIZE", "32"))
+
+
+def _get_available_memory_mb() -> int:
+    """获取当前可用内存（MB），包含 buffer/cache 可回收部分"""
+    try:
+        with open("/proc/meminfo", "r") as f:
+            meminfo = {}
+            for line in f:
+                parts = line.split(":")
+                if len(parts) == 2:
+                    key = parts[0].strip()
+                    # 值形如 "948 MiB" 或 "948 kB"
+                    val = parts[1].strip().split()[0]
+                    meminfo[key] = int(val)
+        # MemAvailable 是系统真正可用的内存（含可回收 cache），单位 kB
+        avail_kb = meminfo.get("MemAvailable", meminfo.get("MemFree", 0))
+        return avail_kb // 1024
+    except Exception as e:
+        logger.warning(f"Failed to read memory info: {e}")
+        return 0
+
+
+def _get_total_memory_mb() -> int:
+    """获取系统总物理内存（MB），用于判断是否处于低内存环境"""
+    try:
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split(":")[1].strip().split()[0]) // 1024
+    except Exception as e:
+        logger.warning(f"Failed to read total memory: {e}")
+    return 0
+
 
 # 模型会下载到: {LOCAL_MODEL_PATH}/embedding/{model_name}/ 或标准 HuggingFace 缓存目录
 def _get_local_model_path():
@@ -75,6 +116,39 @@ def _get_local_embedding_model():
             return _embedding_model
 
         try:
+            # 内存安全检查：加载 PyTorch + 模型需要较多内存，
+            # 在内存不足时（如 WSL 受限环境）强行加载会触发 OOM killer，导致系统崩溃/断连
+            # 注意：PyTorch 加载时虚拟内存需求可达 6-10GB，远超物理内存占用，
+            # 因此除了检查可用内存，还要检查系统总内存，在低内存系统中直接禁用本地模型。
+            avail_mb = _get_available_memory_mb()
+            total_mb = _get_total_memory_mb()
+            # 系统总内存低于此阈值（默认 12GB）视为低内存环境，禁用本地模型加载
+            # PyTorch + sentence-transformers 虚拟内存需求可达 6-10GB，
+            # 在 8GB/16GB 的 WSL 环境中极易触发 OOM killer
+            min_total_mb = int(os.getenv("LOCAL_EMBEDDING_MIN_TOTAL_MEMORY_MB", "12288"))
+
+            if total_mb > 0 and total_mb < min_total_mb:
+                logger.error(
+                    f"System total memory {total_mb}MB is below the safe threshold "
+                    f"{min_total_mb}MB for loading local embedding model. "
+                    f"PyTorch requires 6-10GB virtual memory which would trigger OOM killer. "
+                    f"Please configure an online Embedding model (model_type=2) in the database."
+                )
+                return None
+
+            if 0 < avail_mb < MIN_MEMORY_REQUIRED_MB:
+                logger.error(
+                    f"Insufficient available memory to load local embedding model: "
+                    f"available={avail_mb}MB, required>={MIN_MEMORY_REQUIRED_MB}MB. "
+                    f"Please configure an online Embedding model (model_type=2) in the database."
+                )
+                return None
+            if avail_mb > 0:
+                logger.info(
+                    f"Memory check passed: available={avail_mb}MB, total={total_mb}MB, "
+                    f"required_available>={MIN_MEMORY_REQUIRED_MB}MB, required_total>={min_total_mb}MB"
+                )
+
             # 设置环境变量，避免 tokenizers 并行警告
             os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -215,6 +289,59 @@ async def generate_embedding_local(text: str) -> Optional[List[float]]:
         return None
 
 
+async def generate_embeddings_batch_local(texts: List[str]) -> List[Optional[List[float]]]:
+    """
+    使用本地模型批量生成 embedding（异步包装）
+
+    相比逐条调用 generate_embedding_local，批量推理可显著减少模型调用开销，
+    并通过分批控制单批内存占用，避免在低内存环境（如 WSL）中触发 OOM。
+
+    Args:
+        texts: 要生成 embedding 的文本列表
+
+    Returns:
+        embedding 向量列表，与输入顺序一致；失败的位置为 None
+    """
+    if not texts:
+        return []
+
+    results: List[Optional[List[float]]] = [None] * len(texts)
+    # 收集非空文本的索引
+    valid_indices = [i for i, t in enumerate(texts) if t]
+    if not valid_indices:
+        return results
+
+    model = _get_local_embedding_model()
+    if not model:
+        logger.warning("Local embedding model not available, batch embedding skipped")
+        return results
+
+    import asyncio
+
+    loop = asyncio.get_event_loop()
+
+    # 分批推理，控制单批内存占用
+    batch_size = max(1, LOCAL_EMBEDDING_BATCH_SIZE)
+    for start in range(0, len(valid_indices), batch_size):
+        batch_slice = valid_indices[start : start + batch_size]
+        batch_texts = [texts[i] for i in batch_slice]
+        try:
+            # embed_documents 是同步方法，在线程池中执行避免阻塞事件循环
+            batch_embeddings = await loop.run_in_executor(
+                None, model.embed_documents, batch_texts
+            )
+            for idx, emb in zip(batch_slice, batch_embeddings):
+                results[idx] = emb
+        except Exception as e:
+            logger.error(
+                f"Failed to generate batch embedding (batch start={start}): {e}",
+                exc_info=True,
+            )
+            # 该批失败的位置保持 None，继续处理下一批
+
+    return results
+
+
 def generate_embedding_local_sync(text: str) -> Optional[List[float]]:
     """
     使用本地模型生成 embedding（同步版本）
@@ -240,5 +367,4 @@ def generate_embedding_local_sync(text: str) -> Optional[List[float]]:
         logger.error(
             f"Failed to generate embedding with local model: {e}", exc_info=True
         )
-        return None
         return None

@@ -46,7 +46,7 @@ async def generate_embedding(text: str) -> Optional[List[float]]:
         return None
 
     model = await get_default_embedding_model()
-    
+
     # 如果没有配置 embedding 模型，使用离线本地模型
     if not model:
         logger.info("No embedding model configured, falling back to local CPU model")
@@ -92,3 +92,87 @@ async def generate_embedding(text: str) -> Optional[List[float]]:
         return await generate_embedding_local(text)
 
     return None
+
+
+async def generate_embeddings_batch(texts: List[str]) -> List[Optional[List[float]]]:
+    """
+    批量生成 embedding，减少模型调用开销，避免在低内存环境中逐条加载/推理导致 OOM。
+
+    Args:
+        texts: 文本列表
+
+    Returns:
+        embedding 向量列表，与输入顺序一致；失败的位置为 None
+    """
+    if not texts:
+        return []
+
+    results: List[Optional[List[float]]] = [None] * len(texts)
+    valid_indices = [i for i, t in enumerate(texts) if t]
+    if not valid_indices:
+        return results
+
+    model = await get_default_embedding_model()
+
+    # 没有配置在线 embedding 模型，使用本地批量推理
+    if not model:
+        logger.info("No embedding model configured, falling back to local CPU model (batch)")
+        from common.local_embedding import generate_embeddings_batch_local
+
+        batch_results = await generate_embeddings_batch_local(
+            [texts[i] for i in valid_indices]
+        )
+        for idx, emb in zip(valid_indices, batch_results):
+            results[idx] = emb
+        return results
+
+    try:
+        api_key = model["api_key"] or "empty"
+        base_url = model.get("api_domain") or ""
+
+        if not base_url or not base_url.strip():
+            logger.warning("API domain is empty, falling back to local CPU model (batch)")
+            from common.local_embedding import generate_embeddings_batch_local
+
+            batch_results = await generate_embeddings_batch_local(
+                [texts[i] for i in valid_indices]
+            )
+            for idx, emb in zip(valid_indices, batch_results):
+                results[idx] = emb
+            return results
+
+        base_url = base_url.strip()
+        if not base_url.startswith(("http://", "https://")):
+            if base_url.startswith(("localhost", "127.0.0.1", "0.0.0.0")):
+                base_url = f"http://{base_url}"
+            else:
+                base_url = f"https://{base_url}"
+
+        if model["supplier"] == 3:  # Ollama
+            if not base_url.endswith("/v1"):
+                base_url = f"{base_url.rstrip('/')}/v1"
+
+        valid_texts = [texts[i] for i in valid_indices]
+        async with AsyncOpenAI(api_key=api_key, base_url=base_url) as client:
+            response = await client.embeddings.create(
+                model=model["base_model"], input=valid_texts
+            )
+            # OpenAI 批量接口返回的 data 按 index 排序，取 embedding 即可
+            for item, idx in zip(response.data, valid_indices):
+                results[idx] = item.embedding
+
+    except Exception as e:
+        traceback.print_exc()
+        logger.warning(
+            f"Failed to generate batch embedding with online model: {e}, "
+            f"falling back to local CPU model (batch)"
+        )
+        from common.local_embedding import generate_embeddings_batch_local
+
+        batch_results = await generate_embeddings_batch_local(
+            [texts[i] for i in valid_indices]
+        )
+        for idx, emb in zip(valid_indices, batch_results):
+            results[idx] = emb
+
+    return results
