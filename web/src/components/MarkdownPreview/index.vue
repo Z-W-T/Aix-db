@@ -387,8 +387,17 @@ const runReadBuffer = (readCallback = () => {}, endCallback = () => {}) => {
     endCallback()
   }
 
-  // 动态渲染时实时调用父组件滚动条至最底端
-  parentScollBottomMethod.value()
+  // 动态渲染时，仅在用户已在底部附近时才自动滚动，避免打断用户手动翻阅
+  scrollToBottomByThreshold()
+  if (refWrapperContent.value) {
+    const distanceToBottom
+      = refWrapperContent.value.scrollHeight
+        - refWrapperContent.value.scrollTop
+        - refWrapperContent.value.clientHeight
+    if (distanceToBottom <= 100) {
+      parentScollBottomMethod.value()
+    }
+  }
 }
 
 const showText = () => {
