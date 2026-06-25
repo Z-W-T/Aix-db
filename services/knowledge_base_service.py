@@ -170,14 +170,27 @@ async def retrieve_knowledge_context(
     limit = top_k or RAG_TOP_K
 
     with pool.get_session() as session:
-        kb = _get_or_create_kb(session, kb_id, kb_name, oid)
+        # 指定了具体知识库时，只查该库
+        if kb_id or kb_name:
+            kb = _get_or_create_kb(session, kb_id, kb_name, oid)
+            kb_ids = [kb.id]
+        else:
+            # 未指定时，搜索所有已启用的知识库
+            all_kbs = session.query(TKnowledgeBase.id).filter(
+                TKnowledgeBase.oid == oid,
+                TKnowledgeBase.enabled == True,
+            ).all()
+            kb_ids = [kb[0] for kb in all_kbs] if all_kbs else []
+
+        if not kb_ids:
+            return ""
 
         sql = text(
             """
             SELECT content, source_file_key,
                    (1 - (embedding <=> CAST(:embedding_array AS vector))) AS similarity
             FROM t_knowledge_chunk
-            WHERE kb_id = :kb_id
+            WHERE kb_id = ANY(:kb_ids)
               AND embedding IS NOT NULL
             ORDER BY embedding <=> CAST(:embedding_array AS vector)
             LIMIT :top_k
@@ -188,7 +201,7 @@ async def retrieve_knowledge_context(
             sql,
             {
                 "embedding_array": embedding_str,
-                "kb_id": kb.id,
+                "kb_ids": kb_ids,
                 "top_k": limit,
             },
         ).fetchall()
