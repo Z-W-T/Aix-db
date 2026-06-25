@@ -60,3 +60,16 @@ export async function searchKnowledgeBase(params: {
   })
   return fetch(req)
 }
+
+/**
+ * 列出所有知识库及其包含的文件和分块
+ */
+export async function listKnowledgeBase() {
+  const url = new URL(`${BASE_URL}/list`)
+  const req = new Request(url, {
+    mode: 'cors',
+    method: 'get',
+    headers: getHeaders(),
+  })
+  return fetch(req)
+}

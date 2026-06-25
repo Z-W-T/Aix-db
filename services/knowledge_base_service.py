@@ -211,3 +211,95 @@ async def retrieve_knowledge_context(
         return ""
 
     return "\n".join(lines)
+
+
+def list_knowledge_bases(oid: int = 1) -> List[Dict]:
+    """
+    列出所有知识库及其包含的文件（按 parse_file_key 聚合 chunks）。
+
+    Returns:
+        [
+            {
+                "kb_id": int, "kb_name": str, "enabled": bool, "create_time": str,
+                "chunk_count": int,
+                "files": [
+                    {
+                        "source_file_key": str, "parse_file_key": str,
+                        "file_name": str, "chunk_count": int, "create_time": str,
+                        "chunks": [{"chunk_index": int, "content": str}]
+                    }
+                ]
+            }
+        ]
+    """
+    with pool.get_session() as session:
+        kbs = session.query(TKnowledgeBase).filter(
+            TKnowledgeBase.oid == oid
+        ).order_by(TKnowledgeBase.id.desc()).all()
+
+        if not kbs:
+            return []
+
+        kb_ids = [kb.id for kb in kbs]
+        # 一次性查出所有 chunks，按 kb_id 分组
+        all_chunks = session.query(
+            TKnowledgeChunk.kb_id,
+            TKnowledgeChunk.source_file_key,
+            TKnowledgeChunk.parse_file_key,
+            TKnowledgeChunk.chunk_index,
+            TKnowledgeChunk.content,
+            TKnowledgeChunk.create_time,
+        ).filter(TKnowledgeChunk.kb_id.in_(kb_ids)).order_by(
+            TKnowledgeChunk.kb_id, TKnowledgeChunk.parse_file_key, TKnowledgeChunk.chunk_index
+        ).all()
+
+        # 按 kb_id -> parse_file_key 聚合
+        kb_map: Dict[int, Dict] = {
+            kb.id: {
+                "kb_id": kb.id,
+                "kb_name": kb.name,
+                "enabled": bool(kb.enabled),
+                "create_time": kb.create_time.strftime("%Y-%m-%d %H:%M:%S") if kb.create_time else "",
+                "chunk_count": 0,
+                "files": {},
+            }
+            for kb in kbs
+        }
+
+        for row in all_chunks:
+            kb_id, source_key, parse_key, chunk_idx, content, create_time = row
+            kb_item = kb_map.get(kb_id)
+            if not kb_item:
+                continue
+            kb_item["chunk_count"] += 1
+
+            file_item = kb_item["files"].get(parse_key)
+            if not file_item:
+                # 从 key 中提取文件名：格式为 {uuid}__{filename}.ext
+                file_name = parse_key
+                if "__" in parse_key:
+                    file_name = parse_key.split("__", 1)[1]
+                file_item = {
+                    "source_file_key": source_key or "",
+                    "parse_file_key": parse_key or "",
+                    "file_name": file_name,
+                    "chunk_count": 0,
+                    "create_time": create_time.strftime("%Y-%m-%d %H:%M:%S") if create_time else "",
+                    "chunks": [],
+                }
+                kb_item["files"][parse_key] = file_item
+
+            file_item["chunk_count"] += 1
+            # 限制单个 chunk 展示内容长度，避免前端渲染过多文本
+            preview = (content or "")[:500]
+            file_item["chunks"].append({
+                "chunk_index": chunk_idx or 0,
+                "content": preview,
+            })
+
+        # files dict -> list
+        result = []
+        for kb_item in kb_map.values():
+            kb_item["files"] = list(kb_item["files"].values())
+            result.append(kb_item)
+        return result

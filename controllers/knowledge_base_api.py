@@ -13,6 +13,7 @@ from constants.code_enum import SysCodeEnum
 from services.knowledge_base_service import (
     index_uploaded_file_async,
     retrieve_knowledge_context,
+    list_knowledge_bases,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,3 +92,27 @@ async def search_knowledge(request: Request):
     )
 
     return {"context": context}
+
+
+@bp.get("/list")
+@check_token
+@async_json_resp
+async def list_knowledge_base(request: Request):
+    """
+    列出所有知识库及其包含的文件和分块
+
+    Response: [
+        {
+            "kb_id": int, "kb_name": str, "enabled": bool, "create_time": str,
+            "chunk_count": int,
+            "files": [
+                {
+                    "source_file_key": str, "parse_file_key": str,
+                    "file_name": str, "chunk_count": int, "create_time": str,
+                    "chunks": [{"chunk_index": int, "content": str}]
+                }
+            ]
+        }
+    ]
+    """
+    return list_knowledge_bases(oid=1)

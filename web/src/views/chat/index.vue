@@ -1,7 +1,5 @@
 <script lang="tsx" setup>
 import type { InputInst, UploadFileInfo } from 'naive-ui'
-// Import Cookies to clear token on logout
-import { UAParser } from 'ua-parser-js'
 import * as GlobalAPI from '@/api'
 import { fetch_model_list, set_default_model } from '@/api/aimodel'
 import { fetch_datasource_list } from '@/api/datasource'
@@ -1066,80 +1064,22 @@ const onInputKeydown = (e: KeyboardEvent) => {
     e.stopPropagation()
     return
   }
-  // 原有 Enter 发送逻辑
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    handleCreateStylized()
-  }
+  // Enter 键仅换行，不发送；发送统一通过鼠标点击发送按钮
 }
-
-const keys = useMagicKeys()
-const enterCommand = keys.Enter
-const enterCtrl = keys.Enter
-
-const activeElement = useActiveElement()
-const notUsingInput = computed(
-  () => activeElement.value?.tagName !== 'TEXTAREA',
-)
-
-const parser = new UAParser()
-const isMacos = parser.getOS().name.includes('Mac')
 
 const placeholder = computed(() => {
   if (stylizingLoading.value) {
-    return `输入任意问题...`
+    return `输入任意问题，点击发送按钮中断当前回复并重新提问`
   }
   if (qa_type.value === 'COMMON_QA') {
     return `输入 / 选择技能，先思考后回答`
   }
-  return `输入任意问题, 按 ${
-    isMacos ? 'Command' : 'Ctrl'
-  } + Enter 键快捷开始...`
+  return `输入任意问题，点击发送按钮开始...`
 })
 
 const generateRandomSuffix = function () {
   return Math.floor(Math.random() * 10000) // 生成0到9999之间的随机整数
 }
-
-watch(
-  () => enterCommand.value,
-  () => {
-    if (!isMacos || notUsingInput.value) {
-      return
-    }
-
-    if (stylizingLoading.value) {
-      return
-    }
-
-    if (!enterCommand.value) {
-      handleCreateStylized()
-    }
-  },
-  {
-    deep: true,
-  },
-)
-
-watch(
-  () => enterCtrl.value,
-  () => {
-    if (isMacos || notUsingInput.value) {
-      return
-    }
-
-    if (stylizingLoading.value) {
-      return
-    }
-
-    if (!enterCtrl.value) {
-      handleCreateStylized()
-    }
-  },
-  {
-    deep: true,
-  },
-)
 
 // 重置状态
 const handleResetState = () => {
@@ -2709,12 +2649,13 @@ const handleHistoryClick = async (item: any) => {
                     class="send-btn-circle"
                     :class="{ disabled: !inputTextString && !pendingUploadFileInfoList?.length && !stylizingLoading }"
                     :disabled="!inputTextString && !pendingUploadFileInfoList?.length && !stylizingLoading"
-                    aria-label="发送"
+                    :aria-label="stylizingLoading ? '中断回复' : '发送'"
+                    :title="stylizingLoading ? '点击中断当前回复，可重新提问' : '发送'"
                     @click="handleCreateStylized()"
                   >
                     <div
                       v-if="stylizingLoading"
-                      class="i-svg-spinners:pulse-2 text-white text-18"
+                      class="i-hugeicons:stop-sign text-white text-18"
                     ></div>
                     <div
                       v-else
