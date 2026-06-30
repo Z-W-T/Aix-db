@@ -1,2 +1,1 @@
 window.__AIX_RUNTIME_CONFIG__ = window.__AIX_RUNTIME_CONFIG__ || {}
-window.__AIX_RUNTIME_CONFIG__.VITE_ENABLE_PAGE_AGENT = 'false'
